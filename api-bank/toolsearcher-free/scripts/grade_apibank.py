@@ -698,8 +698,9 @@ def main() -> int:
     md = build_markdown(base, args, agg, results)
     print(md)
     print("=" * 60)
+    md_path = out_path[:-5] + ".md" if out_path.endswith(".json") else out_path + ".md"
     print(f"[ok] results: {out_path}")
-    print(f"[ok] summary:  {md_path[:-5] + '.md' if out_path.endswith('.json') else out_path + '.md'}")
+    print(f"[ok] summary:  {md_path}")
     return 0
 
 
