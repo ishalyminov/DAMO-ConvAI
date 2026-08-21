@@ -24,7 +24,7 @@ Usage:
   python scripts/grade_apibank.py \
       --ip 10.0.0.42 --model mymodel --port 8000 \
       --level 3 --mode text --limit 10 \
-      --output data/results/l3.json
+      --output data/apibank/results/l3.json
 
 Outputs:
   <output>.json   - per-datapoint verdicts
@@ -47,7 +47,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 from convert_apibank import build_qwen_system_prompt  # noqa: E402
 
-DEFAULT_PROCESSED = os.path.normpath(os.path.join(HERE, "..", "data", "processed"))
+DEFAULT_PROCESSED = os.path.normpath(os.path.join(HERE, "..", "data", "apibank", "processed"))
 
 # ---------------------------------------------------------------------------
 # Helpers shared with the converter (kept in sync).
@@ -622,19 +622,53 @@ def main() -> int:
               f"({len(catalog)} tools)")
 
     out_path = args.output or os.path.join(
-        HERE, "..", "data", "results",
+        HERE, "..", "data", "apibank", "results",
         f"l{args.level}{'-'+args.variant if args.level==3 else ''}_{args.mode}.json",
     )
     out_path = os.path.abspath(out_path)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
 
-    results: list[dict] = []
+    # Resume support: load existing results if output exists and matches config
+    existing_results: list[dict] = []
+    graded_ids = set()
+    if os.path.exists(out_path):
+        try:
+            with open(out_path) as f:
+                existing = json.load(f)
+            if (existing.get("endpoint") == base and
+                existing.get("model") == args.model and
+                existing.get("mode") == args.mode and
+                existing.get("level") == args.level and
+                existing.get("variant") == args.variant):
+                existing_results = existing.get("results", [])
+                graded_ids = {r["id"] for r in existing_results if "id" in r}
+                print(f"[resume] loaded {len(existing_results)} existing results from {out_path}")
+        except Exception as e:
+            print(f"[warn] could not load existing results: {e}")
+
+    results: list[dict] = list(existing_results)
     extra_pl = None
     if args.extra_payload_file:
         extra_pl = json.load(open(args.extra_payload_file))
     elif args.extra_payload:
         extra_pl = json.loads(args.extra_payload)
+
+    def write_results():
+        with open(out_path, "w") as f:
+            json.dump({"endpoint": base, "model": args.model, "mode": args.mode,
+                       "level": args.level, "variant": args.variant,
+                       "datapoints_graded": len(results),
+                       "results": results}, f, indent=2)
+        agg = aggregate(results)
+        md = build_markdown(base, args, agg, results)
+        md_path = out_path[:-5] + ".md" if out_path.endswith(".json") else out_path + ".md"
+        with open(md_path, "w") as f:
+            f.write(md)
+
     for i, dp in enumerate(dps):
+        if dp["id"] in graded_ids:
+            print(f"  [{i+1}/{len(dps)}] SKIP dp={dp['id']} (already graded)")
+            continue
         if i and args.sleep:
             time.sleep(args.sleep)
         try:
@@ -645,7 +679,8 @@ def main() -> int:
                           qwen_system_prompt=qwen_system_prompt)
         except KeyboardInterrupt:
             print("\n[interrupt] saving partial results")
-            break
+            write_results()
+            return 130
         results.append(v)
         # progress
         ok = sum(1 for x in v["verdicts"] if x["args_exact"])
@@ -653,23 +688,18 @@ def main() -> int:
         err_flag = "ERR" if v["error"] else "ok"
         print(f"  [{i+1}/{len(dps)}] {err_flag} dp={dp['id']} "
               f"gold={tot} pred={v['pred_call_count']} exact={ok}/{tot}")
+        # incremental write
+        write_results()
 
-    # Write json + md
-    with open(out_path, "w") as f:
-        json.dump({"endpoint": base, "model": args.model, "mode": args.mode,
-                   "level": args.level, "variant": args.variant,
-                   "datapoints_graded": len(results),
-                   "results": results}, f, indent=2)
+    # final write (covers all)
+    write_results()
+    print("\n" + "=" * 60)
     agg = aggregate(results)
     md = build_markdown(base, args, agg, results)
-    md_path = out_path[:-5] + ".md" if out_path.endswith(".json") else out_path + ".md"
-    with open(md_path, "w") as f:
-        f.write(md)
-    print("\n" + "=" * 60)
     print(md)
     print("=" * 60)
     print(f"[ok] results: {out_path}")
-    print(f"[ok] summary:  {md_path}")
+    print(f"[ok] summary:  {md_path[:-5] + '.md' if out_path.endswith('.json') else out_path + '.md'}")
     return 0
 
 
