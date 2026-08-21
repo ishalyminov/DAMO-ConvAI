@@ -56,6 +56,8 @@ python scripts/convert_apibank.py --test-data data/test-data --out data/processe
 python scripts/validate_apibank_conversion.py
 
 # 3. grade an OpenAI-compatible model (canonical API-Bank text format)
+#    - writes results incrementally after each datapoint
+#    - supports `--limit N` and resumes from existing output file
 python scripts/grade_apibank.py \
     --ip <host> --port 8000 --model <model> \
     --level 3 --variant batch --mode text \
